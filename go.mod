@@ -3,8 +3,11 @@ module github.com/bhojpur/finance
 go 1.17
 
 require (
+	github.com/bhojpur/charts v0.0.6
 	github.com/lib/pq v1.10.0
+	github.com/shopspring/decimal v1.3.1
 	github.com/sirupsen/logrus v1.2.0
+	github.com/smartystreets/assertions v0.0.0-20180927180507-b2de0cb4f26d
 	github.com/spf13/cobra v1.1.3
 	google.golang.org/grpc v1.34.0
 	google.golang.org/protobuf v1.27.1
@@ -14,6 +17,7 @@ require (
 
 require (
 	cloud.google.com/go v0.56.0 // indirect
+	github.com/bhojpur/maps v0.0.0-20220106045024-0c1e41ea4e01 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/docker/spdystream v0.0.0-20160310174837-449fdfce4d96 // indirect
 	github.com/go-logr/logr v0.2.0 // indirect
@@ -39,7 +43,6 @@ require (
 	google.golang.org/genproto v0.0.0-20200526211855-cb27e3aa2013 // indirect
 	gopkg.in/inf.v0 v0.9.1 // indirect
 	gopkg.in/yaml.v2 v2.4.0 // indirect
-	gopkg.in/yaml.v3 v3.0.0-20210107192922-496545a6307b // indirect
 	k8s.io/api v0.21.1 // indirect
 	k8s.io/klog/v2 v2.4.0 // indirect
 	k8s.io/utils v0.0.0-20201110183641-67b214c5f920 // indirect

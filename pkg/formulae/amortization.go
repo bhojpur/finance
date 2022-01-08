@@ -1,0 +1,213 @@
+package formulae
+
+// Copyright (c) 2018 Bhojpur Consulting Private Limited, India. All rights reserved.
+
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+// THE SOFTWARE.
+
+import (
+	"encoding/json"
+	"fmt"
+	"io"
+	"os"
+	"path"
+	"time"
+
+	"github.com/shopspring/decimal"
+
+	"github.com/bhojpur/charts/pkg/charts"
+	"github.com/bhojpur/charts/pkg/opts"
+	"github.com/bhojpur/finance/pkg/enums/interesttype"
+)
+
+// Amortization struct holds the configuration and financial details.
+type Amortization struct {
+	Config    *Config
+	Financial Financial
+}
+
+// NewAmortization return a new amortisation object with config and financial fields initialised.
+func NewAmortization(c *Config) (*Amortization, error) {
+	a := Amortization{Config: c}
+	if err := a.Config.setPeriodsAndDates(); err != nil {
+		return nil, err
+	}
+	switch a.Config.InterestType {
+	case interesttype.REDUCING:
+		a.Financial = &Reducing{}
+	case interesttype.FLAT:
+		a.Financial = &Flat{}
+	}
+	return &a, nil
+}
+
+// Row represents a single row in an amortization schedule.
+type Row struct {
+	Period    int64
+	StartDate time.Time
+	EndDate   time.Time
+	Payment   decimal.Decimal
+	Interest  decimal.Decimal
+	Principal decimal.Decimal
+}
+
+// GenerateTable constructs the amortization table based on the configuration.
+func (a Amortization) GenerateTable() ([]Row, error) {
+	var result []Row
+	for i := int64(1); i <= a.Config.periods; i++ {
+		var row Row
+		row.Period = i
+		row.StartDate = a.Config.startDates[i-1]
+		row.EndDate = a.Config.endDates[i-1]
+
+		payment := a.Financial.GetPayment(*a.Config)
+		principalPayment := a.Financial.GetPrincipal(*a.Config, i)
+		interestPayment := a.Financial.GetInterest(*a.Config, i)
+		if a.Config.EnableRounding {
+			row.Payment = payment.Round(a.Config.RoundingPlaces)
+			row.Principal = principalPayment.Round(a.Config.RoundingPlaces)
+			// to avoid rounding errors.
+			row.Interest = row.Payment.Sub(row.Principal)
+		} else {
+			row.Payment = payment
+			row.Principal = principalPayment
+			row.Interest = interestPayment
+		}
+		if i == a.Config.periods {
+			DoPrincipalAdjustmentDueToRounding(&row, result, a.Config.AmountBorrowed, a.Config.EnableRounding, a.Config.RoundingPlaces)
+		}
+		if err := sanityCheckUpdate(&row, a.Config.RoundingErrorTolerance); err != nil {
+			return nil, err
+		}
+		result = append(result, row)
+	}
+	return result, nil
+}
+
+// DoPrincipalAdjustmentDueToRounding takes care of errors in total principal to be collected and adjusts it against the
+// the final principal and payment amount.
+func DoPrincipalAdjustmentDueToRounding(finalRow *Row, rows []Row, principal decimal.Decimal, round bool, places int32) {
+	principalCollected := finalRow.Principal
+	for _, row := range rows {
+		principalCollected = principalCollected.Add(row.Principal)
+	}
+	diff := principal.Abs().Sub(principalCollected.Abs())
+	if round {
+		// subtracting diff coz payment, principal and interest are -ve.
+		finalRow.Payment = finalRow.Payment.Sub(diff).Round(places)
+		finalRow.Principal = finalRow.Principal.Sub(diff).Round(places)
+	} else {
+		finalRow.Payment = finalRow.Payment.Sub(diff)
+		finalRow.Principal = finalRow.Principal.Sub(diff)
+	}
+}
+
+// sanityCheckUpdate verifies the equation,
+// payment = principal + interest for every row.
+// If there is a mismatch due to rounding error and it is withing the tolerance,
+// the difference is adjusted against the interest.
+func sanityCheckUpdate(row *Row, tolerance decimal.Decimal) error {
+	if !row.Payment.Equal(row.Principal.Add(row.Interest)) {
+		diff := row.Payment.Abs().Sub(row.Principal.Add(row.Interest).Abs())
+		if diff.LessThanOrEqual(tolerance) {
+			row.Interest = row.Interest.Sub(diff)
+		} else {
+			return ErrPayment
+		}
+	}
+	return nil
+}
+
+// PrintRows outputs a formatted json for given rows as input.
+func PrintRows(rows []Row) {
+	bytes, _ := json.MarshalIndent(rows, "", "\t")
+	fmt.Printf("%s", bytes)
+}
+
+// PlotRows uses the go-echarts package to generate an interactive plot from the Rows array.
+func PlotRows(rows []Row, fileName string) (err error) {
+	bar := getStackedBarPlot(rows)
+	completePath, err := os.Getwd()
+	if err != nil {
+		return err
+	}
+	filePath := path.Join(completePath, fileName)
+	f, err := os.Create(fmt.Sprintf("%s.html", filePath))
+	if err != nil {
+		return err
+	}
+	defer func() {
+		// setting named err
+		ferr := f.Close()
+		if err == nil {
+			err = ferr
+		}
+	}()
+	return renderer(bar, f)
+}
+
+// getStackedBarPlot returns an instance for stacked bar plot.
+func getStackedBarPlot(rows []Row) *charts.Bar {
+	bar := charts.NewBar()
+	bar.SetGlobalOptions(charts.WithTitleOpts(opts.Title{
+		Title: "Loan repayment schedule",
+	},
+	),
+		charts.WithInitializationOpts(opts.Initialization{
+			Width:  "1200px",
+			Height: "600px",
+		}),
+		charts.WithToolboxOpts(opts.Toolbox{Show: true}),
+		charts.WithLegendOpts(opts.Legend{Show: true}),
+		charts.WithDataZoomOpts(opts.DataZoom{
+			Type:  "inside",
+			Start: 0,
+			End:   50,
+		}),
+		charts.WithDataZoomOpts(opts.DataZoom{
+			Type:  "slider",
+			Start: 0,
+			End:   50,
+		}),
+	)
+	var xAxis []string
+	var interestArr []opts.BarData
+	var principalArr []opts.BarData
+	var paymentArr []opts.BarData
+	minusOne := decimal.NewFromInt(-1)
+	for _, row := range rows {
+		xAxis = append(xAxis, row.EndDate.Format("2006-01-02"))
+		interestArr = append(interestArr, opts.BarData{Value: row.Interest.Mul(minusOne).String()})
+		principalArr = append(principalArr, opts.BarData{Value: row.Principal.Mul(minusOne).String()})
+		paymentArr = append(paymentArr, opts.BarData{Value: row.Payment.Mul(minusOne).String()})
+	}
+	// Put data into instance
+	bar.SetXAxis(xAxis).
+		AddSeries("Principal", principalArr).
+		AddSeries("Interest", interestArr).
+		AddSeries("Payment", paymentArr).SetSeriesOptions(
+		charts.WithBarChartOpts(opts.BarChart{
+			Stack: "stackA",
+		}))
+	return bar
+}
+
+// renderer renders the bar into the writer interface
+func renderer(bar *charts.Bar, writer io.Writer) error {
+	return bar.Render(writer)
+}
