@@ -346,7 +346,7 @@ func TestRenderer(t *testing.T) {
 				err = renderer(tt.args.bar, tt.writer)
 				result := assertions.ShouldEqual(getHtmlWithoutUniqueId(tt.stringWanted), getHtmlWithoutUniqueId(tt.writer.String()))
 				if result != "" {
-					t.Errorf("Rendere() expected != actual. diff:%v", result)
+					t.Errorf("Renderer() expected != actual. diff:%v", result)
 				}
 			}
 			if err != nil && err.Error() != tt.err.Error() {
